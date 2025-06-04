@@ -15,13 +15,14 @@
 #include <cstring>
 #include <arpa/inet.h>
 
-using namespace std;
+#include "json.hpp" // <-- Download json.hpp and place in your directory
 
-// ------------------------- Data Structures -------------------------
+using json = nlohmann::json;
+using namespace std;
 
 using Document = unordered_map<string, string>;
 
-// === Collection: stores documents ===
+// === Collection ===
 class Collection {
 public:
     void insert(Document doc) {
@@ -29,51 +30,22 @@ public:
         documents.push_back(doc);
     }
 
-    vector<Document> findAll() const {
-        return documents;
-    }
+    vector<Document> findAll() const { return documents; }
 
-    optional<Document> findById(const string& id) const {
-        for (const auto& doc : documents) {
-            if (doc.at("_id") == id) {
-                return doc;
-            }
-        }
-        return nullopt;
-    }
-
-    bool deleteById(const string& id) {
-        for (auto it = documents.begin(); it != documents.end(); ++it) {
-            if (it->at("_id") == id) {
-                documents.erase(it);
-                return true;
-            }
-        }
-        return false;
-    }
+    int countDocuments() const { return documents.size(); }
 
     int sum(const string& key) const {
         int total = 0;
-        for (const auto& doc : documents) {
-            if (doc.find(key) != doc.end()) {
-                total += atoi(doc.at(key).c_str());
-            }
-        }
+        for (const auto& doc : documents)
+            if (doc.count(key)) total += atoi(doc.at(key).c_str());
         return total;
     }
 
     set<string> distinct(const string& key) const {
         set<string> values;
-        for (const auto& doc : documents) {
-            if (doc.find(key) != doc.end()) {
-                values.insert(doc.at(key));
-            }
-        }
+        for (const auto& doc : documents)
+            if (doc.count(key)) values.insert(doc.at(key));
         return values;
-    }
-
-    int countDocuments() const {
-        return documents.size();
     }
 
 private:
@@ -81,32 +53,24 @@ private:
     int nextId = 1;
 };
 
-// === UserDB: user has multiple collections ===
 class UserDB {
 public:
-    void createCollection(const string& collectionName) {
-        if (collections.find(collectionName) == collections.end()) {
-            collections[collectionName] = Collection();
-        }
+    void createCollection(const string& name) {
+        if (!collections.count(name))
+            collections[name] = Collection();
     }
 
     Collection& getCollection(const string& name) {
-        return collections[name];
+        return collections.at(name);
     }
 
-    const Collection& getCollection(const string& name) const {  // const overload
-        auto it = collections.find(name);
-        if (it != collections.end()) {
-            return it->second;
-        }
-        throw runtime_error("Collection not found: " + name);
+    const Collection& getCollection(const string& name) const {
+        return collections.at(name);
     }
 
     set<string> listCollections() const {
         set<string> keys;
-        for (const auto& pair : collections) {
-            keys.insert(pair.first);
-        }
+        for (const auto& [name, _] : collections) keys.insert(name);
         return keys;
     }
 
@@ -114,388 +78,240 @@ private:
     unordered_map<string, Collection> collections;
 };
 
-// === MongoLikeSystem: manages users ===
 class System {
 public:
-    void createUser(const string& username) {
-        if (users.find(username) == users.end()) {
-            users[username] = UserDB();
-        }
+    void createUser(const string& user) {
+        if (!users.count(user)) users[user] = UserDB();
     }
 
-    void createCollection(const string& username, const string& collectionName) {
-        users[username].createCollection(collectionName);
+    void createCollection(const string& user, const string& col) {
+        users[user].createCollection(col);
     }
 
-    void insertDocument(const string& username, const string& collectionName, Document doc) {
-        users[username].getCollection(collectionName).insert(doc);
+    void insertDocument(const string& user, const string& col, const Document& doc) {
+        users[user].getCollection(col).insert(doc);
     }
 
-    vector<Document> getDocuments(const string& username, const string& collectionName) const {
-        return users.at(username).getCollection(collectionName).findAll();
+    vector<Document> getDocuments(const string& user, const string& col) const {
+        return users.at(user).getCollection(col).findAll();
     }
 
-    int countDocuments(const string& username, const string& collectionName) const {
-        return users.at(username).getCollection(collectionName).countDocuments();
+    int countDocuments(const string& user, const string& col) const {
+        return users.at(user).getCollection(col).countDocuments();
     }
 
-    int sumField(const string& username, const string& collectionName, const string& key) const {
-        return users.at(username).getCollection(collectionName).sum(key);
+    int sumField(const string& user, const string& col, const string& key) const {
+        return users.at(user).getCollection(col).sum(key);
     }
 
-    set<string> distinctValues(const string& username, const string& collectionName, const string& key) const {
-        return users.at(username).getCollection(collectionName).distinct(key);
+    set<string> distinctValues(const string& user, const string& col, const string& key) const {
+        return users.at(user).getCollection(col).distinct(key);
     }
 
-    set<string> listCollections(const string& username) const {
-        return users.at(username).listCollections();
+    set<string> listCollections(const string& user) const {
+        return users.at(user).listCollections();
     }
 
 private:
     unordered_map<string, UserDB> users;
 };
 
-// === Helpers for JSON conversion ===
+// JSON utils
 string toJson(const Document& doc) {
-    string json = "{";
-    for (auto it = doc.begin(); it != doc.end(); ++it) {
-        json += "\"" + it->first + "\": \"" + it->second + "\"";
-        if (next(it) != doc.end()) json += ", ";
-    }
-    json += "}";
-    return json;
+    json j(doc);
+    return j.dump();
 }
 
 string toJsonArray(const vector<Document>& docs) {
-    string json = "[";
-    for (size_t i = 0; i < docs.size(); ++i) {
-        json += toJson(docs[i]);
-        if (i < docs.size() - 1) json += ", ";
-    }
-    json += "]";
-    return json;
+    json j = json::array();
+    for (auto& doc : docs) j.push_back(doc);
+    return j.dump();
 }
 
-// ------------------------- Simple HTTP Utilities -------------------------
-
-// Split a string by a given delimiter
-vector<string> split(const string& s, char delimiter) {
-    vector<string> tokens;
-    istringstream iss(s);
-    string token;
-    while (getline(iss, token, delimiter)) {
-        tokens.push_back(token);
-    }
-    return tokens;
-}
-
-// Parse a query string (e.g., "field=duration") into a map
-unordered_map<string, string> parseQuery(const string &query) {
+// HTTP helpers
+unordered_map<string, string> parseQuery(const string& query) {
     unordered_map<string, string> params;
-    auto pairs = split(query, '&');
-    for (const auto &p : pairs) {
-        auto kv = split(p, '=');
-        if (kv.size() == 2) {
-            params[kv[0]] = kv[1];
-        }
+    istringstream ss(query);
+    string pair;
+    while (getline(ss, pair, '&')) {
+        size_t eq = pair.find('=');
+        if (eq != string::npos)
+            params[pair.substr(0, eq)] = pair.substr(eq + 1);
     }
     return params;
 }
 
-// A very simple JSON parser for documents that expects a flat JSON object with string values.
-// For example: {"key": "value", "priority": "1"}
-Document parseJson(const string &json) {
+vector<string> split(const string& s, char delim) {
+    vector<string> tokens;
+    istringstream ss(s);
+    string item;
+    while (getline(ss, item, delim)) tokens.push_back(item);
+    return tokens;
+}
+
+Document parseJson(const string& body) {
     Document doc;
-    size_t start = json.find("{");
-    size_t end = json.find("}");
-    if (start == string::npos || end == string::npos || start >= end) {
-        return doc;
-    }
-    string inner = json.substr(start + 1, end - start - 1);
-    auto pairs = split(inner, ',');
-    for (auto &p : pairs) {
-        auto kv = split(p, ':');
-        if (kv.size() == 2) {
-            // Remove quotes and spaces.
-            auto trim = [](string s) {
-                while (!s.empty() && isspace(s.back())) s.pop_back();
-                while (!s.empty() && isspace(s.front())) s.erase(s.begin());
-                if (!s.empty() && s.front() == '\"') s.erase(s.begin());
-                if (!s.empty() && s.back() == '\"') s.pop_back();
-                return s;
-            };
-            string key = trim(kv[0]);
-            string value = trim(kv[1]);
-            doc[key] = value;
-        }
+    auto j = json::parse(body);
+    for (auto it = j.begin(); it != j.end(); ++it) {
+        doc[it.key()] = it.value();
     }
     return doc;
 }
 
-// Send a HTTP response with given status code, content type, and body.
-void sendHttpResponse(int clientSocket, int statusCode, const string &body, const string &contentType = "application/json") {
+void sendHttpResponse(int clientSocket, int statusCode, const string& body) {
     string statusText = (statusCode == 200) ? "OK" : "Error";
     ostringstream oss;
     oss << "HTTP/1.1 " << statusCode << " " << statusText << "\r\n"
-        << "Content-Type: " << contentType << "\r\n"
+        << "Content-Type: application/json\r\n"
         << "Content-Length: " << body.size() << "\r\n"
-        << "Connection: close\r\n"
-        << "\r\n"
-        << body;
+        << "Connection: close\r\n\r\n" << body;
     string response = oss.str();
     send(clientSocket, response.c_str(), response.size(), 0);
 }
 
-// ------------------------- HTTP Request Handler -------------------------
-
-// Global database instance and a mutex to protect it (since our server uses threads).
+// Shared DB
 System db;
 mutex dbMutex;
 
+// Main HTTP request handler
 void handleConnection(int clientSocket) {
-    const int bufferSize = 4096;
-    char buffer[bufferSize];
-    memset(buffer, 0, bufferSize);
-    
-    int received = recv(clientSocket, buffer, bufferSize - 1, 0);
+    const int BUF_SIZE = 8192;
+    char buffer[BUF_SIZE] = {};
+    int received = recv(clientSocket, buffer, BUF_SIZE - 1, 0);
     if (received <= 0) {
         close(clientSocket);
         return;
     }
-    string request(buffer, received);
     
-    // Get the request line (first line)
-    istringstream requestStream(request);
-    string requestLine;
-    getline(requestStream, requestLine);
-    
-    // Remove carriage return if exists
-    if (!requestLine.empty() && requestLine.back() == '\r') {
-        requestLine.pop_back();
-    }
-    
-    // Parse method, URL, HTTP version
-    istringstream lineStream(requestLine);
-    string method, url, httpVersion;
-    lineStream >> method >> url >> httpVersion;
-    
-    // Parse query string if present
+
+    string request(buffer);
+    istringstream ss(request);
+    string method, url, version;
+    ss >> method >> url >> version;
+
     string path = url;
-    string queryStr;
-    auto pos = url.find("?");
-    if (pos != string::npos) {
-        path = url.substr(0, pos);
-        queryStr = url.substr(pos + 1);
+    string query;
+    if (auto q = url.find('?'); q != string::npos) {
+        path = url.substr(0, q);
+        query = url.substr(q + 1);
     }
-    auto queryParams = parseQuery(queryStr);
-    
-    // Split path into segments
-    auto segments = split(path, '/');  // note: first element may be empty because path starts with '/'
-    
-    string responseBody;
-    int responseCode = 200;
-    
+
+    auto segments = split(path, '/');
+    auto queryParams = parseQuery(query);
+
+    string response;
+    int code = 200;
+
     try {
-        // Route the request
         if (method == "POST") {
-            // Endpoint: POST /user/<username> => create user
-            if (segments.size() >= 3 && segments[1] == "user" && segments.size() == 3) {
-                string username = segments[2];
-                {
-                    lock_guard<mutex> lock(dbMutex);
-                    db.createUser(username);
-                }
-                responseBody = "{\"status\": \"User created\"}";
+            if (segments.size() == 3 && segments[1] == "user") {
+                string user = segments[2];
+                lock_guard<mutex> lock(dbMutex);
+                db.createUser(user);
+                response = R"({"status": "User created"})";
             }
-            // Endpoint: POST /user/<username>/collection/<collectionName> => create collection
-            else if (segments.size() >= 5 && segments[1] == "user" && segments[3] == "collection" && segments.size() == 5) {
-                string username = segments[2];
-                string collectionName = segments[4];
-                {
-                    lock_guard<mutex> lock(dbMutex);
-                    db.createUser(username);  // ensure user exists
-                    db.createCollection(username, collectionName);
-                }
-                responseBody = "{\"status\": \"Collection created\"}";
+            else if (segments.size() == 5 && segments[1] == "user" && segments[3] == "collection") {
+                string user = segments[2], col = segments[4];
+                lock_guard<mutex> lock(dbMutex);
+                db.createUser(user);
+                db.createCollection(user, col);
+                response = R"({"status": "Collection created"})";
             }
-            // Endpoint: POST /user/<username>/collection/<collectionName>/document => insert document.
-            else if (segments.size() >= 7 && segments[1] == "user" && segments[3] == "collection" && segments[5] == "document" && segments.size() == 7) {
-                string username = segments[2];
-                string collectionName = segments[4];
-                // The rest of the request (after header) is the body
-                string body;
-                // Read until the end of headers (look for "\r\n\r\n")
-                size_t headerEnd = request.find("\r\n\r\n");
-                if (headerEnd != string::npos) {
-                    body = request.substr(headerEnd + 4);
+            else if (segments.size() == 6 && segments[5] == "document") {
+                string user = segments[2], col = segments[4];
+
+                string body = request.substr(request.find("\r\n\r\n") + 4);
+                size_t contentLength = 0;
+                if (auto pos = request.find("Content-Length:"); pos != string::npos) {
+                    contentLength = stoi(request.substr(pos + 15));
+                    while (body.size() < contentLength) {
+                        char more[4096];
+                        int got = recv(clientSocket, more, sizeof(more), 0);
+                        if (got <= 0) break;
+                        body.append(more, got);
+                    }
                 }
+
                 Document doc = parseJson(body);
-                {
-                    lock_guard<mutex> lock(dbMutex);
-                    db.createUser(username);  // ensure user exists
-                    db.createCollection(username, collectionName);
-                    db.insertDocument(username, collectionName, doc);
-                }
-                responseBody = "{\"status\": \"Document inserted\"}";
+                lock_guard<mutex> lock(dbMutex);
+                db.createUser(user);
+                db.createCollection(user, col);
+                db.insertDocument(user, col, doc);
+                response = R"({"status": "Document inserted"})";
+            } else {
+                code = 404;
+                response = R"({"error": "Unknown endpoint"})";
+            }
+        } else if (method == "GET") {
+            if (segments.size() == 6 && segments[5] == "documents") {
+                string user = segments[2], col = segments[4];
+                lock_guard<mutex> lock(dbMutex);
+                response = toJsonArray(db.getDocuments(user, col));
+            }
+            else if (segments.size() == 6 && segments[5] == "count") {
+                string user = segments[2], col = segments[4];
+                lock_guard<mutex> lock(dbMutex);
+                response = "{\"count\": " + to_string(db.countDocuments(user, col)) + "}";
+            }
+            else if (segments.size() == 6 && segments[5] == "sum") {
+                string user = segments[2], col = segments[4];
+                string field = queryParams["field"];
+                lock_guard<mutex> lock(dbMutex);
+                response = "{\"sum\": " + to_string(db.sumField(user, col, field)) + "}";
+            }
+            else if (segments.size() == 6 && segments[5] == "distinct") {
+                string user = segments[2], col = segments[4];
+                string field = queryParams["field"];
+                lock_guard<mutex> lock(dbMutex);
+                json j = json::array();
+                for (auto& val : db.distinctValues(user, col, field)) j.push_back(val);
+                response = j.dump();
+            }
+            else if (segments.size() == 4 && segments[3] == "collections") {
+                string user = segments[2];
+                lock_guard<mutex> lock(dbMutex);
+                json j = json::array();
+                for (auto& val : db.listCollections(user)) j.push_back(val);
+                response = j.dump();
             }
             else {
-                responseCode = 404;
-                responseBody = "{\"error\": \"Endpoint not found\"}";
+                code = 404;
+                response = R"({"error": "Unknown endpoint"})";
             }
-        } 
-        else if (method == "GET") {
-            // Endpoint: GET /user/<username>/collection/<collectionName>/documents => list documents
-            if (segments.size() >= 6 && segments[1] == "user" && segments[3] == "collection" && segments[5] == "documents") {
-                string username = segments[2];
-                string collectionName = segments[4];
-                vector<Document> docs;
-                {
-                    lock_guard<mutex> lock(dbMutex);
-                    docs = db.getDocuments(username, collectionName);
-                }
-                responseBody = toJsonArray(docs);
-            }
-            // Endpoint: GET /user/<username>/collection/<collectionName>/count => count documents
-            else if (segments.size() >= 6 && segments[1] == "user" && segments[3] == "collection" && segments[5] == "count") {
-                string username = segments[2];
-                string collectionName = segments[4];
-                int count = 0;
-                {
-                    lock_guard<mutex> lock(dbMutex);
-                    count = db.countDocuments(username, collectionName);
-                }
-                responseBody = "{\"count\": " + to_string(count) + "}";
-            }
-            // Endpoint: GET /user/<username>/collection/<collectionName>/sum?field=<key> => sum field
-            else if (segments.size() >= 6 && segments[1] == "user" && segments[3] == "collection" && segments[5] == "sum") {
-                string username = segments[2];
-                string collectionName = segments[4];
-                if (queryParams.find("field") == queryParams.end()) {
-                    responseCode = 400;
-                    responseBody = "{\"error\": \"Missing query parameter: field\"}";
-                } else {
-                    string field = queryParams["field"];
-                    int sum = 0;
-                    {
-                        lock_guard<mutex> lock(dbMutex);
-                        sum = db.sumField(username, collectionName, field);
-                    }
-                    responseBody = "{\"sum\": " + to_string(sum) + "}";
-                }
-            }
-            // Endpoint: GET /user/<username>/collection/<collectionName>/distinct?field=<key> => distinct values
-            else if (segments.size() >= 6 && segments[1] == "user" && segments[3] == "collection" && segments[5] == "distinct") {
-                string username = segments[2];
-                string collectionName = segments[4];
-                if (queryParams.find("field") == queryParams.end()) {
-                    responseCode = 400;
-                    responseBody = "{\"error\": \"Missing query parameter: field\"}";
-                } else {
-                    string field = queryParams["field"];
-                    set<string> distinctVals;
-                    {
-                        lock_guard<mutex> lock(dbMutex);
-                        distinctVals = db.distinctValues(username, collectionName, field);
-                    }
-                    // Build JSON array from set
-                    string jsonArray = "[";
-                    bool first = true;
-                    for (const auto &val : distinctVals) {
-                        if (!first) jsonArray += ", ";
-                        jsonArray += "\"" + val + "\"";
-                        first = false;
-                    }
-                    jsonArray += "]";
-                    responseBody = jsonArray;
-                }
-            }
-            // Endpoint: GET /user/<username>/collections => list collections for user
-            else if (segments.size() >= 4 && segments[1] == "user" && segments[3] == "collections") {
-                string username = segments[2];
-                set<string> collections;
-                {
-                    lock_guard<mutex> lock(dbMutex);
-                    collections = db.listCollections(username);
-                }
-                // Build JSON array from set
-                string jsonArray = "[";
-                bool first = true;
-                for (const auto &coll : collections) {
-                    if (!first) jsonArray += ", ";
-                    jsonArray += "\"" + coll + "\"";
-                    first = false;
-                }
-                jsonArray += "]";
-                responseBody = jsonArray;
-            }
-            else {
-                responseCode = 404;
-                responseBody = "{\"error\": \"Endpoint not found\"}";
-            }
+        } else {
+            code = 405;
+            response = R"({"error": "Method not allowed"})";
         }
-        else {
-            responseCode = 405;
-            responseBody = "{\"error\": \"Method not allowed\"}";
-        }
+    } catch (exception& e) {
+        code = 500;
+        response = "{\"error\": \"" + string(e.what()) + "\"}";
     }
-    catch (exception &ex) {
-        responseCode = 500;
-        responseBody = string("{\"error\": \"") + ex.what() + "\"}";
-    }
-    
-    sendHttpResponse(clientSocket, responseCode, responseBody);
+
+    sendHttpResponse(clientSocket, code, response);
     close(clientSocket);
 }
 
-// ------------------------- Main: Server Loop -------------------------
-
 int main() {
-    // Create a socket (IPv4, TCP)
-    int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
-    if (serverSocket == -1) {
-        cerr << "Error creating socket\n";
-        return 1;
-    }
-
-    // Allow quick reuse of the port
+    int server = socket(AF_INET, SOCK_STREAM, 0);
     int opt = 1;
-    setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
-    // Bind to port 8080 on all interfaces
-    sockaddr_in serverAddr;
-    serverAddr.sin_family = AF_INET;
-    serverAddr.sin_port = htons(8080);
-    serverAddr.sin_addr.s_addr = INADDR_ANY;
-    memset(&(serverAddr.sin_zero), '\0', 8);
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(8080);
+    addr.sin_addr.s_addr = INADDR_ANY;
 
-    if (bind(serverSocket, (struct sockaddr *)&serverAddr, sizeof(serverAddr)) == -1) {
-        cerr << "Error binding to port\n";
-        close(serverSocket);
-        return 1;
-    }
+    bind(server, (sockaddr*)&addr, sizeof(addr));
+    listen(server, 10);
 
-    if (listen(serverSocket, 10) == -1) {
-        cerr << "Error listening on socket\n";
-        close(serverSocket);
-        return 1;
-    }
-
-    cout << "Server running on port 8080...\n";
+    cout << "Server running on http://localhost:8080\n";
 
     while (true) {
-        sockaddr_in clientAddr;
-        socklen_t clientSize = sizeof(clientAddr);
-        int clientSocket = accept(serverSocket, (struct sockaddr *)&clientAddr, &clientSize);
-        if (clientSocket == -1) {
-            cerr << "Error accepting connection\n";
-            continue;
-        }
-
-        // Handle each connection in a separate thread.
-        thread t(handleConnection, clientSocket);
-        t.detach();
+        sockaddr_in client;
+        socklen_t size = sizeof(client);
+        int clientSocket = accept(server, (sockaddr*)&client, &size);
+        thread(handleConnection, clientSocket).detach();
     }
 
-    close(serverSocket);
-    return 0;
+    close(server);
 }
